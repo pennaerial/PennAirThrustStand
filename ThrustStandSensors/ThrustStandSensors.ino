@@ -14,10 +14,10 @@ float rpm = 0;
 const int magnets = 8;                // Number of magnets per revolution
 const unsigned long interval = 1000;  // Interval to calculate RPM (ms)
 
-const int VOLTAGE_PIN = A0;
-const int CURRENT_PIN = A1;
+const int VOLTAGE_PIN = 36;
+const int CURRENT_PIN = 39;
 const float ADC_REF = 5.0;      // Arduino reference voltage
-const int ADC_RES = 1023;
+const int ADC_RES = 4095;
 
 // Adjust these based on calibration
 const float VOLTAGE_SCALE = 7.07;
