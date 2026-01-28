@@ -19,9 +19,10 @@ const float ADC_REF = 3.3;
 const int ADC_RES = 1023;
 const int NUM_SAMPLES = 100;
 
-const float VOLTAGE_SCALE = 10.57;
-const float CURRENT_SCALE = 19.2;
-const float CURRENT_OFFSET = 0.618;
+const float VOLTAGE_SCALE = 12.3; // Old: 10.57
+const float CURRENT_SCALE = 18.96; // Old: 19.2
+const float CURRENT_OFFSET = 0.558; // Old: 0.618
+const float VOLTAGE_OFFSET = -2.37; // Old: 0
 
 // ======================
 // OBJECTS
@@ -47,7 +48,7 @@ bool logging = false;
 // TIMING
 // ======================
 unsigned long lastLog = 0;
-unsigned long startTime = 0;   // 👈 NEW
+unsigned long startTime = 0;
 const unsigned long LOG_INTERVAL = 200;
 
 // ======================
@@ -66,7 +67,7 @@ float readVoltage() {
     sum += analogRead(VOLTAGE_PIN);
 
   float vAdc = (sum / (float)NUM_SAMPLES) * ADC_REF / ADC_RES;
-  return vAdc * VOLTAGE_SCALE;
+  return (vAdc * VOLTAGE_SCALE) + VOLTAGE_OFFSET;
 }
 
 float readCurrent() {
