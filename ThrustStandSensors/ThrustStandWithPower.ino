@@ -47,6 +47,7 @@ bool logging = false;
 // TIMING
 // ======================
 unsigned long lastLog = 0;
+unsigned long startTime = 0;   // 👈 NEW
 const unsigned long LOG_INTERVAL = 200;
 
 // ======================
@@ -108,7 +109,9 @@ void loop() {
     float voltage = readVoltage();
     float current = readCurrent();
     float power = voltage * current;
-    unsigned long timestamp = millis();
+
+    // time since logging started (seconds)
+    float timestamp = (millis() - startTime) / 1000.0;
 
     // RPM
     if (millis() - lastTime >= interval) {
@@ -122,7 +125,7 @@ void loop() {
     }
 
     // ===== CSV OUTPUT =====
-    Serial.print(timestamp);
+    Serial.print(timestamp, 3);
     Serial.print(",");
     Serial.print(thrust, 3);
     Serial.print(",");
@@ -141,7 +144,9 @@ void loop() {
 
     if (cmd == 's') {
       logging = true;
-      Serial.println("time_ms,thrust,voltage,current,power,rpm");
+      startTime = millis();  
+      lastLog = startTime;   
+      Serial.println("time_s,thrust,voltage,current,power,rpm");
     }
     else if (cmd == 'e') {
       logging = false;
