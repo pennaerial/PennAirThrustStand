@@ -1,0 +1,45 @@
+#include <Arduino.h>
+
+// ---- Constants ----
+const int THERM_PIN = A0;
+
+const float VREF = 5.0;        // change to 3.3 if needed
+const float ADC_MAX = 16383.0;  // 10-bit ADC
+
+const float R_FIXED = 100000.0;  // 100k resistor
+const float R0 = 100000.0;       // 100k at 25C
+const float T0 = 298.15;         // 25C in Kelvin
+const float BETA = 3950.0;       // beta value
+
+void setup() {
+  Serial.begin(115200);
+  analogReadResolution(14);
+
+}
+
+void loop() {
+  // Read ADC
+  int adc = analogRead(THERM_PIN);
+
+  // Convert ADC to voltage
+  float voltage = (adc / ADC_MAX) * VREF;
+
+  // Convert voltage to thermistor resistance
+  float r_ntc = R_FIXED * voltage / (VREF - voltage);
+
+  // Beta equation: solve for temperature
+  float tempK = 1.0 / ( (1.0 / T0) + (1.0 / BETA) * log(r_ntc / R0) );
+  float tempC = tempK - 273.15;
+
+  // Print results
+  Serial.print("ADC: ");
+  Serial.print(adc);
+  Serial.print("  R_ntc: ");
+  Serial.print(r_ntc, 0);
+  Serial.print(" ohms  Temp: ");
+  Serial.print(tempC, 2);
+  Serial.println(" C");
+
+  delay(1000);
+}
+
