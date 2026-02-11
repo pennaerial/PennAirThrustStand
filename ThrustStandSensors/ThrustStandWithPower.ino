@@ -30,8 +30,8 @@ const float VOLTAGE_OFFSET = -2.37;
 // THROTTLE PROCEDURE
 // ======================
 const int NUM_STEPS = 3;
-float throttleSteps[NUM_STEPS] = {100.0, 40.0, 100.0};
-unsigned long stepDurations[NUM_STEPS] = {10000, 45000, 5000};
+float throttleSteps[NUM_STEPS] = {1.0, 5.0};
+unsigned long stepDurations[NUM_STEPS] = {10000, 5000};
 
 // ======================
 // OBJECTS

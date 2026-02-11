@@ -205,7 +205,7 @@
 // void changeCalFactor() {
 //   float oldCal = LoadCell.getCalFactor();
 //   Serial.println("***");
-//   Serial.print("Current calibration value: ");
+//   // Serial.print("Current calibration value: ");
 //   Serial.println(oldCal);
 //   Serial.println("Send new value (e.g. 696.0):");
 
