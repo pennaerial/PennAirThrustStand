@@ -57,6 +57,8 @@ bool motorRunning = false;
 bool inProcedure = false;
 unsigned long stepStartTime = 0;
 int currentStep = 0;
+bool rampingDown = false;
+unsigned long lastThrottleChange = 0;
 
 // ======================
 // LOGGING
@@ -78,7 +80,8 @@ void countPulse() {
 // ======================
 void updateESC() {
   throttlePercent = constrain(throttlePercent, 0.0, 100.0);
-  esc.writeMicroseconds(1000 + throttlePercent * 10);
+  int signal = map(throttlePercent, 0, 100, 1000, 2000);
+  esc.writeMicroseconds(signal);
 }
 
 // ======================
@@ -134,12 +137,13 @@ void calibrate() {
 void changeCalFactor() {
   Serial.print("Current cal factor: ");
   Serial.println(LoadCell.getCalFactor());
-  Serial.println("Send new calibration value:");
+  Serial.println("Send new calibration value (non-zero):");
 
-  float newCal = 0;
-  while (newCal <= 0) {
-    if (Serial.available())
+  float newCal = 0.0;
+  while (newCal == 0.0) {
+    if (Serial.available()) {
       newCal = Serial.parseFloat();
+    }
   }
 
   LoadCell.setCalFactor(newCal);
@@ -178,11 +182,11 @@ void setup() {
   Serial.println("Commands:");
   Serial.println(" s = start logging");
   Serial.println(" e = stop logging");
-  Serial.println(" procedure = throttle sweep");
-  Serial.println(" x = motor stop");
   Serial.println(" t = tare load cell");
-  Serial.println(" r = recalibrate load cell");
-  Serial.println(" c = change calibration factor");
+  Serial.println(" r = recalibrate load cell with known mass");
+  Serial.println(" c = change calibration factor manually");
+  Serial.println(" p = start throttle sweep");
+  Serial.println(" x = emergency motor stop");
 }
 
 // ======================
@@ -191,17 +195,33 @@ void setup() {
 void loop() {
   LoadCell.update();
 
-  // ----- PROCEDURE -----
-  if (inProcedure && millis() - stepStartTime >= stepDurations[currentStep]) {
-    currentStep++;
-    if (currentStep >= NUM_STEPS) {
+  // ----- THROTTLE SWEEP -----
+  if (inProcedure && !rampingDown && millis() - lastThrottleChange >= 2000) {
+    throttlePercent += 5;
+    if (throttlePercent > 100) throttlePercent = 100;
+
+    updateESC();
+    lastThrottleChange = millis();
+
+    if (throttlePercent == 100) {
+      // hold at max
+      delay(2000);
+      rampingDown = true;
+      lastThrottleChange = millis();
+    }
+  }
+
+  if (rampingDown && millis() - lastThrottleChange >= 500) {
+    throttlePercent -= 5;
+    if (throttlePercent <= 0) {
       throttlePercent = 0;
       updateESC();
       inProcedure = false;
+      rampingDown = false;
+      motorRunning = false;
     } else {
-      throttlePercent = throttleSteps[currentStep];
       updateESC();
-      stepStartTime = millis();
+      lastThrottleChange = millis();
     }
   }
 
@@ -244,17 +264,23 @@ void loop() {
       startTime = millis();
       Serial.println("time,thrust,voltage,current,power,rpm,throttle");
     } else if (cmd == "e") logging = false;
-    else if (cmd == "procedure") {
-      currentStep = 0;
-      throttlePercent = throttleSteps[0];
+    else if (cmd == "p") {
+      throttlePercent = 0;
       updateESC();
-      stepStartTime = millis();
+      motorRunning = true;
       inProcedure = true;
+      rampingDown = false;
+      lastThrottleChange = millis();
     } else if (cmd == "x") {
       throttlePercent = 0;
       updateESC();
       inProcedure = false;
-    } else if (cmd == "t") LoadCell.tareNoDelay();
+      rampingDown = false;
+      motorRunning = false;
+    } else if (cmd == "t")  {
+      LoadCell.tareNoDelay();
+      Serial.println("*** DONE ***");
+    }
     else if (cmd == "r") calibrate();
     else if (cmd == "c") changeCalFactor();
   }
