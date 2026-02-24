@@ -26,6 +26,9 @@ const float CURRENT_SCALE = 18.96;
 const float CURRENT_OFFSET = 0.558;
 const float VOLTAGE_OFFSET = -2.37;
 
+const int ESC_MIN = 1200;
+const int ESC_MAX = 2000;
+
 // ======================
 // THROTTLE PROCEDURE
 // ======================
@@ -80,7 +83,14 @@ void countPulse() {
 // ======================
 void updateESC() {
   throttlePercent = constrain(throttlePercent, 0.0, 100.0);
-  int signal = map(throttlePercent, 0, 100, 1000, 2000);
+
+  int signal;
+  if (throttlePercent <= 0.0) {
+    signal = 1000;              // FULL STOP
+  } else {
+    signal = map(throttlePercent, 0, 100, ESC_MIN, ESC_MAX);
+  }
+
   esc.writeMicroseconds(signal);
 }
 
@@ -187,6 +197,7 @@ void setup() {
   Serial.println(" c = change calibration factor manually");
   Serial.println(" p = start throttle sweep");
   Serial.println(" x = emergency motor stop");
+  Serial.println(" m = manual ESC calibration");
 }
 
 // ======================
@@ -197,7 +208,7 @@ void loop() {
 
   // ----- THROTTLE SWEEP -----
   if (inProcedure && !rampingDown && millis() - lastThrottleChange >= 2000) {
-    throttlePercent += 5;
+    throttlePercent += 10;
     if (throttlePercent > 100) throttlePercent = 100;
 
     updateESC();
@@ -211,8 +222,8 @@ void loop() {
     }
   }
 
-  if (rampingDown && millis() - lastThrottleChange >= 500) {
-    throttlePercent -= 5;
+  if (rampingDown && millis() - lastThrottleChange >= 1000) {
+    throttlePercent -= 10;
     if (throttlePercent <= 0) {
       throttlePercent = 0;
       updateESC();
@@ -283,5 +294,11 @@ void loop() {
     }
     else if (cmd == "r") calibrate();
     else if (cmd == "c") changeCalFactor();
+    else if (cmd.startsWith("m")) {
+      int pwm = cmd.substring(1).toInt();
+      esc.writeMicroseconds(pwm);
+      Serial.print("Manual PWM: ");
+      Serial.println(pwm);
+    }
   }
 }
