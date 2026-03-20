@@ -32,7 +32,7 @@ const int ESC_MAX = 2000;
 // ======================
 // THROTTLE PROCEDURE
 // ======================
-const int NUM_STEPS = 3;
+const int NUM_STEPS = 2;
 float throttleSteps[NUM_STEPS] = {1.0, 5.0};
 unsigned long stepDurations[NUM_STEPS] = {10000, 5000};
 
@@ -41,7 +41,7 @@ unsigned long stepDurations[NUM_STEPS] = {10000, 5000};
 // ======================
 DHT dht(DHTPIN, DHT11);
 HX711_ADC LoadCell(HX711_DOUT, HX711_SCK);
-Servo esc;
+Servo esc; // For PWM output for ESC control
 
 // ======================
 // RPM
@@ -57,11 +57,16 @@ const unsigned long interval = 1000;
 // ======================
 float throttlePercent = 0.0;
 bool motorRunning = false;
+
+// Throttle sweep mode
 bool inProcedure = false;
-unsigned long stepStartTime = 0;
-int currentStep = 0;
 bool rampingDown = false;
 unsigned long lastThrottleChange = 0;
+
+// Manual throttle step mode
+bool manualMode = false;
+int currentStep = 0;
+unsigned long stepStartTime = 0;
 
 // ======================
 // LOGGING
@@ -86,7 +91,7 @@ void updateESC() {
 
   int signal;
   if (throttlePercent <= 0.0) {
-    signal = 1000;              // FULL STOP
+    signal = 1000;  // Time period too small; stops the motor
   } else {
     signal = map(throttlePercent, 0, 100, ESC_MIN, ESC_MAX);
   }
@@ -115,7 +120,7 @@ float readCurrent() {
 // CALIBRATION FUNCTIONS
 // ======================
 void calibrate() {
-  Serial.println("*** LOAD CELL CALIBRATION ***");
+  //Serial.println("*** LOAD CELL CALIBRATION ***");
   Serial.println("Send 't' to tare (no load)");
 
   bool ready = false;
@@ -179,7 +184,7 @@ void setup() {
   LoadCell.start(stabilizingtime, tare);
 
   if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
-    Serial.println("HX711 timeout — check wiring");
+    Serial.println("HX711 timeout: check wiring");
     while (1);
   }
 
@@ -196,6 +201,7 @@ void setup() {
   Serial.println(" r = recalibrate load cell with known mass");
   Serial.println(" c = change calibration factor manually");
   Serial.println(" p = start throttle sweep");
+  Serial.println(" u = start manual throttle step mode");
   Serial.println(" x = emergency motor stop");
   Serial.println(" m = manual ESC calibration");
 }
@@ -206,33 +212,70 @@ void setup() {
 void loop() {
   LoadCell.update();
 
-  // ----- THROTTLE SWEEP -----
-  if (inProcedure && !rampingDown && millis() - lastThrottleChange >= 2000) {
-    throttlePercent += 10;
-    if (throttlePercent > 100) throttlePercent = 100;
+  // ======================
+  // AUTOMATIC SWEEP MODE
+  // ======================
+  if (inProcedure && !manualMode) {
 
-    updateESC();
-    lastThrottleChange = millis();
+    // Ramp up
+    if (!rampingDown && millis() - lastThrottleChange >= 4000) {
 
-    if (throttlePercent == 100) {
-      // hold at max
-      delay(2000);
-      rampingDown = true;
+      throttlePercent += 10;
+      if (throttlePercent > 100) throttlePercent = 100;
+
+      updateESC();
       lastThrottleChange = millis();
+
+      if (throttlePercent == 100) {
+        rampingDown = true;
+        lastThrottleChange = millis();
+      }
+    }
+
+    // Ramp down
+    if (rampingDown && millis() - lastThrottleChange >= 1000) {
+
+      throttlePercent -= 10;
+
+      if (throttlePercent <= 0) {
+        throttlePercent = 0;
+        updateESC();
+
+        inProcedure = false;
+        rampingDown = false;
+        motorRunning = false;
+      }
+      else {
+        updateESC();
+        lastThrottleChange = millis();
+      }
     }
   }
 
-  if (rampingDown && millis() - lastThrottleChange >= 1000) {
-    throttlePercent -= 10;
-    if (throttlePercent <= 0) {
-      throttlePercent = 0;
-      updateESC();
-      inProcedure = false;
-      rampingDown = false;
-      motorRunning = false;
-    } else {
-      updateESC();
-      lastThrottleChange = millis();
+  // ======================
+  // MANUAL STEP MODE
+  // ======================
+  if (manualMode && motorRunning) {
+
+    if (millis() - stepStartTime >= stepDurations[currentStep]) {
+
+      currentStep++;
+
+      if (currentStep >= NUM_STEPS) {
+
+        throttlePercent = 0;
+        updateESC();
+
+        manualMode = false;
+        motorRunning = false;
+      }
+      else {
+
+        throttlePercent = throttleSteps[currentStep];
+        updateESC();
+
+        stepStartTime = millis();
+      }
     }
   }
 
@@ -288,6 +331,20 @@ void loop() {
       inProcedure = false;
       rampingDown = false;
       motorRunning = false;
+      Serial.println("Stopped.");
+    } else if (cmd == "u") {
+
+      inProcedure = false;
+      rampingDown = false;
+      manualMode = true;
+      motorRunning = true;
+
+      currentStep = 0;
+      throttlePercent = throttleSteps[0];
+      updateESC();
+      stepStartTime = millis();
+
+      Serial.println("Manual step mode started.");
     } else if (cmd == "t")  {
       LoadCell.tareNoDelay();
       Serial.println("*** DONE ***");
