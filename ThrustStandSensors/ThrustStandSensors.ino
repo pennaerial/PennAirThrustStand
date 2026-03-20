@@ -1,227 +1,363 @@
-// // Load cell, temperature sensor, and RPM measurement
-// #include <HX711_ADC.h>
-// #include <DHT.h>
+#include <HX711_ADC.h>
+#include <DHT.h>
+#include <Servo.h>
 
-// const int HX711_dout = 0; // MCU > HX711 dout pin
-// const int HX711_sck = 1;  // MCU > HX711 sck pin
-// const int DHTPIN = 4;
-// const int hall = 5;
+// ======================
+// PIN DEFINITIONS
+// ======================
+const int HX711_DOUT = 0;
+const int HX711_SCK  = 1;
+const int DHTPIN     = 4;
+const int HALL       = 5;
+const int ESC_PIN    = 9;
 
-// volatile unsigned long pulseCount = 0;
-// unsigned long lastTime = 0;
-// float rpm = 0;
+const int VOLTAGE_PIN = A2;
+const int CURRENT_PIN = A1;
 
-// const int magnets = 8;                // Number of magnets per revolution
-// const unsigned long interval = 1000;  // Interval to calculate RPM (ms)
+// ======================
+// ADC + SCALING
+// ======================
+const float ADC_REF = 3.3;
+const int ADC_RES = 1023;
+const int NUM_SAMPLES = 100;
 
-// const int VOLTAGE_PIN = 36;
-// const int CURRENT_PIN = 39;
-// const float ADC_REF = 5.0;      // Arduino reference voltage
-// const int ADC_RES = 4095;
+const float VOLTAGE_SCALE = 12.3;
+const float CURRENT_SCALE = 18.96;
+const float CURRENT_OFFSET = 0.558;
+const float VOLTAGE_OFFSET = -2.37;
 
-// // Adjust these based on calibration
-// const float VOLTAGE_SCALE = 7.07;
-// const float CURRENT_SCALE = 14;
-// const float CURRENT_OFFSET = 0.618;
+const int ESC_MIN = 1200;
+const int ESC_MAX = 2000;
 
-// float temp;
-// unsigned long t = 0;
+// ======================
+// THROTTLE PROCEDURE
+// ======================
+const int NUM_STEPS = ;
+float throttleSteps[NUM_STEPS] = {1.0, 5.0};
+unsigned long stepDurations[NUM_STEPS] = {10000, 5000};
 
-// DHT dht(DHTPIN, DHT11);
-// HX711_ADC LoadCell(HX711_dout, HX711_sck);
+const int NUM_STEPS = 8;
 
-// void countPulse() {
-//   pulseCount++;
-// }
+// ======================
+// OBJECTS
+// ======================
+DHT dht(DHTPIN, DHT11);
+HX711_ADC LoadCell(HX711_DOUT, HX711_SCK);
+Servo esc;
 
+// ======================
+// RPM
+// ======================
+volatile unsigned long pulseCount = 0;
+unsigned long lastTime = 0;
+float rpm = 0;
+const int magnets = 8;
+const unsigned long interval = 1000;
 
-// const int NUM_SAMPLES = 20;       // Number of ADC readings to average
-// const float FILTER_ALPHA = 0.1;   // Optional exponential smoothing factor
+// ======================
+// STATE
+// ======================
+float throttlePercent = 0.0;
+bool motorRunning = false;
 
-// float smoothedVoltage = 0;
-// float smoothedCurrent = 0;
+// Sweep mode
+bool inProcedure = false;
+bool rampingDown = false;
+unsigned long lastThrottleChange = 0;
 
-// float readVoltage() {
-//     long sum = 0;
-//     for (int i = 0; i < NUM_SAMPLES; i++) {
-//         sum += analogRead(VOLTAGE_PIN);
-//     }
-//     float vAdc = (sum / (float)NUM_SAMPLES) * ADC_REF / ADC_RES;
-//     float voltage = vAdc * VOLTAGE_SCALE;
+// Manual step mode
+bool manualMode = false;
+int currentStep = 0;
+unsigned long stepStartTime = 0;
 
-//     // Exponential smoothing
-//     smoothedVoltage = (FILTER_ALPHA * voltage) + ((1 - FILTER_ALPHA) * smoothedVoltage);
-//     return smoothedVoltage;
-// }
+// ======================
+// LOGGING
+// ======================
+bool logging = false;
+unsigned long lastLog = 0;
+unsigned long startTime = 0;
+const unsigned long LOG_INTERVAL = 200;
 
-// float readCurrent() {
-//     long sum = 0;
-//     for (int i = 0; i < NUM_SAMPLES; i++) {
-//         sum += analogRead(CURRENT_PIN);
-//     }
-//     float iAdc = (sum / (float)NUM_SAMPLES) * ADC_REF / ADC_RES;
-//     float current = (iAdc * CURRENT_SCALE) + CURRENT_OFFSET;
+// ======================
+// INTERRUPT
+// ======================
+void countPulse() {
+  pulseCount++;
+}
 
-//     // Exponential smoothing
-//     smoothedCurrent = (FILTER_ALPHA * current) + ((1 - FILTER_ALPHA) * smoothedCurrent);
-//     return smoothedCurrent;
-// }
+// ======================
+// ESC OUTPUT
+// ======================
+void updateESC() {
+  throttlePercent = constrain(throttlePercent, 0.0, 100.0);
 
-// void setup() {
-//   Serial.begin(9600);
-//   pinMode(hall, INPUT_PULLUP);
-//   attachInterrupt(digitalPinToInterrupt(hall), countPulse, FALLING);
+  int signal;
+  if (throttlePercent <= 0.0) {
+    signal = 1000;              // FULL STOP
+  } else {
+    signal = map(throttlePercent, 0, 100, ESC_MIN, ESC_MAX);
+  }
 
-//   dht.begin();
-//   LoadCell.begin();
+  esc.writeMicroseconds(signal);
+}
 
-//   unsigned long stabilizingtime = 2000;
-//   bool _tare = true;
-//   delay(10);
+// ======================
+// SENSOR READS
+// ======================
+float readVoltage() {
+  long sum = 0;
+  for (int i = 0; i < NUM_SAMPLES; i++) sum += analogRead(VOLTAGE_PIN);
+  float vAdc = (sum / (float)NUM_SAMPLES) * ADC_REF / ADC_RES;
+  return (vAdc * VOLTAGE_SCALE) + VOLTAGE_OFFSET;
+}
 
-//   Serial.println("\nStarting...");
-//   LoadCell.start(stabilizingtime, _tare);
+float readCurrent() {
+  long sum = 0;
+  for (int i = 0; i < NUM_SAMPLES; i++) sum += analogRead(CURRENT_PIN);
+  float iAdc = (sum / (float)NUM_SAMPLES) * ADC_REF / ADC_RES;
+  return (iAdc * CURRENT_SCALE) + CURRENT_OFFSET;
+}
 
-//   if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
-//     Serial.println("Timeout, check HX711 wiring!");
-//     while (1);
-//   } else {
-//     LoadCell.setCalFactor(1.0); // Default calibration
-//     Serial.println("Startup complete");
-//   }
+// ======================
+// CALIBRATION FUNCTIONS
+// ======================
+void calibrate() {
+  Serial.println("*** LOAD CELL CALIBRATION ***");
+  Serial.println("Send 't' to tare (no load)");
 
-//   while (!LoadCell.update());
-//   calibrate(); // Start calibration
-// }
+  bool ready = false;
+  while (!ready) {
+    LoadCell.update();
+    if (Serial.available() && Serial.read() == 't')
+      LoadCell.tareNoDelay();
+    if (LoadCell.getTareStatus()) ready = true;
+  }
 
-// void loop() {
-//   static bool newDataReady = false;
-//   const unsigned long serialPrintInterval = 100; // ms between data prints
+  Serial.println("Place known mass and send its value (grams)");
 
-//   float voltage = readVoltage();
-//   float current = readCurrent();
-//   float power = voltage * current;
+  float known_mass = 0;
+  while (known_mass <= 0) {
+    LoadCell.update();
+    if (Serial.available())
+      known_mass = Serial.parseFloat();
+  }
 
-//   Serial.print("Voltage: ");
-//   Serial.print(voltage, 2);
-//   Serial.print(" V | Current: ");
-//   Serial.print(current, 2);
-//   Serial.print(" A | Power: ");
-//   Serial.print(power, 2);
-//   Serial.println(" W");
+  LoadCell.refreshDataSet();
+  float cal = LoadCell.getNewCalibration(known_mass);
+  LoadCell.setCalFactor(cal);
 
-//   // Update load cell
-//   if (LoadCell.update()) newDataReady = true;
+  Serial.print("Calibration factor set to: ");
+  Serial.println(cal);
+  Serial.println("*** DONE ***");
+}
 
-//   // Print data if ready and interval elapsed
-//   if (newDataReady && millis() - t > serialPrintInterval) {
-//     newDataReady = false;
-//     t = millis();
+void changeCalFactor() {
+  Serial.print("Current cal factor: ");
+  Serial.println(LoadCell.getCalFactor());
+  Serial.println("Send new calibration value (non-zero):");
 
-//     Serial.println();
+  float newCal = 0.0;
+  while (newCal == 0.0) {
+    if (Serial.available()) {
+      newCal = Serial.parseFloat();
+    }
+  }
 
-//     // Load cell
-//     float i = LoadCell.getData();
-//     Serial.print("Load cell: ");
-//     Serial.println(i);
+  LoadCell.setCalFactor(newCal);
+  Serial.print("Updated cal factor: ");
+  Serial.println(newCal);
+}
 
-//     // Temperature
-//     temp = dht.readTemperature();
-//     if (!isnan(temp)) {
-//       Serial.print("Temperature: ");
-//       Serial.println(temp);
-//     }
+// ======================
+// SETUP
+// ======================
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
 
-//     // RPM
-//     unsigned long currentTime = millis();
-//     if (currentTime - lastTime >= interval) {
-//       noInterrupts();
-//       unsigned long count = pulseCount;
-//       pulseCount = 0;
-//       interrupts();
+  pinMode(HALL, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(HALL), countPulse, FALLING);
 
-//       rpm = (count / (float)magnets) * (60000.0 / interval);
-//       Serial.print("RPM: ");
-//       Serial.println(rpm, 1);
+  dht.begin();
+  LoadCell.begin();
 
-//       lastTime = currentTime;
-//     }
-//   }
+  unsigned long stabilizingtime = 2000;
+  bool tare = true;
+  LoadCell.start(stabilizingtime, tare);
 
-//   // Serial commands
-//   if (Serial.available() > 0) {
-//     char inByte = Serial.read();
-//     if (inByte == 't') LoadCell.tareNoDelay();
-//     else if (inByte == 'r') calibrate();
-//     else if (inByte == 'c') changeCalFactor();
-//   }
+  if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
+    Serial.println("HX711 timeout — check wiring");
+    while (1);
+  }
 
-//   if (LoadCell.getTareStatus()) {
-//     Serial.println("Tare complete");
-//   }
-// }
+  esc.attach(ESC_PIN);
+  esc.writeMicroseconds(1000);
+  Serial.println("Arming ESC...");
+  delay(3000);
 
-// // ---------- Calibration Functions ---------- //
+  Serial.println("READY");
+  Serial.println("Commands:");
+  Serial.println(" s = start logging");
+  Serial.println(" e = stop logging");
+  Serial.println(" t = tare load cell");
+  Serial.println(" r = recalibrate load cell with known mass");
+  Serial.println(" c = change calibration factor manually");
+  Serial.println(" p = start throttle sweep");
+  Serial.println(" u = manual step mode");
+  Serial.println(" x = emergency motor stop");
+  Serial.println(" m = manual ESC calibration");
+}
 
-// void calibrate() {
-//   Serial.println("***");
-//   Serial.println("Start calibration: place load cell level and empty. Send 't' to tare.");
+// ======================
+// LOOP
+// ======================
+void loop() {
+  LoadCell.update();
 
-//   bool _resume = false;
-//   while (!_resume) {
-//     LoadCell.update();
-//     if (Serial.available() > 0 && Serial.read() == 't')
-//       LoadCell.tareNoDelay();
-//     if (LoadCell.getTareStatus()) {
-//       Serial.println("Tare complete");
-//       _resume = true;
-//     }
-//   }
+// ======================
+  // AUTOMATIC SWEEP MODE
+  // ======================
+  if (inProcedure && !manualMode) {
 
-//   Serial.println("Place known mass, then send its weight (e.g. 100.0).");
-//   float known_mass = 0;
-//   _resume = false;
-//   while (!_resume) {
-//     LoadCell.update();
-//     if (Serial.available() > 0) {
-//       known_mass = Serial.parseFloat();
-//       if (known_mass > 0) {
-//         Serial.print("Known mass: ");
-//         Serial.println(known_mass);
-//         _resume = true;
-//       }
-//     }
-//   }
+    // Ramp up
+    if (!rampingDown && millis() - lastThrottleChange >= 4000) {
 
-//   LoadCell.refreshDataSet();
-//   float newCalibrationValue = LoadCell.getNewCalibration(known_mass);
-//   Serial.print("New calibration value: ");
-//   Serial.println(newCalibrationValue);
-//   LoadCell.setCalFactor(newCalibrationValue);
+      throttlePercent += 10;
+      if (throttlePercent > 100) throttlePercent = 100;
 
-//   Serial.println("*** Calibration complete ***");
-// }
+      updateESC();
+      lastThrottleChange = millis();
 
-// void changeCalFactor() {
-//   float oldCal = LoadCell.getCalFactor();
-//   Serial.println("***");
-//   // Serial.print("Current calibration value: ");
-//   Serial.println(oldCal);
-//   Serial.println("Send new value (e.g. 696.0):");
+      if (throttlePercent == 100) {
+        rampingDown = true;
+        lastThrottleChange = millis();
+      }
+    }
 
-//   float newCal = 0;
-//   bool _resume = false;
-//   while (!_resume) {
-//     if (Serial.available() > 0) {
-//       newCal = Serial.parseFloat();
-//       if (newCal > 0) {
-//         LoadCell.setCalFactor(newCal);
-//         Serial.print("New calibration value: ");
-//         Serial.println(newCal);
-//         _resume = true;
-//       }
-//     }
-//   }
-//   Serial.println("Calibration factor updated.");
-//   Serial.println("***");
-// }
+    // Ramp down
+    if (rampingDown && millis() - lastThrottleChange >= 1000) {
+
+      throttlePercent -= 10;
+
+      if (throttlePercent <= 0) {
+        throttlePercent = 0;
+        updateESC();
+
+        inProcedure = false;
+        rampingDown = false;
+        motorRunning = false;
+      }
+      else {
+        updateESC();
+        lastThrottleChange = millis();
+      }
+    }
+  }
+
+  // ======================
+  // MANUAL STEP MODE
+  // ======================
+  if (manualMode && motorRunning) {
+
+    if (millis() - stepStartTime >= stepDurations[currentStep]) {
+
+      currentStep++;
+
+      if (currentStep >= NUM_STEPS) {
+
+        throttlePercent = 0;
+        updateESC();
+
+        manualMode = false;
+        motorRunning = false;
+      }
+      else {
+
+        throttlePercent = throttleSteps[currentStep];
+        updateESC();
+
+        stepStartTime = millis();
+      }
+    }
+  }
+
+  // ----- LOGGING -----
+  if (logging && millis() - lastLog >= LOG_INTERVAL) {
+    lastLog = millis();
+
+    float thrust = LoadCell.getData();
+    float voltage = readVoltage();
+    float current = readCurrent();
+    float power = voltage * current;
+
+    if (millis() - lastTime >= interval) {
+      noInterrupts();
+      unsigned long count = pulseCount;
+      pulseCount = 0;
+      interrupts();
+      rpm = (count / (float)magnets) * (60000.0 / interval);
+      lastTime = millis();
+    }
+
+    float t = (millis() - startTime) / 1000.0;
+
+    Serial.print(t, 2); Serial.print(",");
+    Serial.print(thrust, 3); Serial.print(",");
+    Serial.print(voltage, 3); Serial.print(",");
+    Serial.print(current, 3); Serial.print(",");
+    Serial.print(power, 3); Serial.print(",");
+    Serial.print(rpm, 1); Serial.print(",");
+    Serial.println(throttlePercent, 1);
+  }
+
+  // ----- SERIAL -----
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+
+    if (cmd == "s") {
+      logging = true;
+      startTime = millis();
+      Serial.println("time,thrust,voltage,current,power,rpm,throttle");
+    } else if (cmd == "e") logging = false;
+    else if (cmd == "p") {
+      throttlePercent = 0;
+      updateESC();
+      motorRunning = true;
+      inProcedure = true;
+      rampingDown = false;
+      lastThrottleChange = millis();
+    } else if (cmd == "x") {
+      throttlePercent = 0;
+      updateESC();
+      inProcedure = false;
+      rampingDown = false;
+      motorRunning = false;
+      Serial.println("Stopped.");
+    } else if (cmd == "u") {
+
+      inProcedure = false;
+      rampingDown = false;
+      manualMode = true;
+      motorRunning = true;
+
+      currentStep = 0;
+      throttlePercent = throttleSteps[0];
+      updateESC();
+      stepStartTime = millis();
+
+      Serial.println("Manual step mode started.");
+    } else if (cmd == "t")  {
+      LoadCell.tareNoDelay();
+      Serial.println("*** DONE ***");
+    }
+    else if (cmd == "r") calibrate();
+    else if (cmd == "c") changeCalFactor();
+    else if (cmd.startsWith("m")) {
+      int pwm = cmd.substring(1).toInt();
+      esc.writeMicroseconds(pwm);
+      Serial.print("Manual PWM: ");
+      Serial.println(pwm);
+    }
+  }
+}
