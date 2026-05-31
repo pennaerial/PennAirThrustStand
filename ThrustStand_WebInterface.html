@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thrust Stand — BLE Serial Monitor</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #1a1a1a;
+    --bg-secondary: #252525;
+    --text: #e0e0e0;
+    --text-dim: #909090;
+    --border: #3a3a3a;
+    --accent: #4fc3f7;
+    --success: #66bb6a;
+    --error: #ef5350;
+    --warn: #ffa726;
+  }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logo {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: 1px;
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .led {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #444;
+    transition: background 0.3s;
+  }
+  .led.connected { background: var(--success); }
+  .led.connecting { background: var(--warn); animation: pulse 0.8s infinite; }
+  .led.error { background: var(--error); }
+
+  @keyframes pulse { 50% { opacity: 0.5; } }
+
+  /* Main layout */
+  .main {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    gap: 12px;
+    overflow-y: auto;
+  }
+
+  .sidebar-section {
+    margin-bottom: 4px;
+  }
+
+  .sidebar-label {
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  .connect-btn {
+    width: 100%;
+    padding: 8px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 4px;
+  }
+  .connect-btn:hover { background: var(--accent); color: var(--bg); }
+  .connect-btn.disconnect { border-color: var(--error); color: var(--error); }
+  .connect-btn.disconnect:hover { background: var(--error); color: var(--bg); }
+
+  /* Command menu */
+  .cmd-menu {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px;
+    font-size: 10px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .cmd-menu .cmd-line { display: block; }
+  .cmd-menu .cmd-key { color: var(--accent); font-weight: 500; }
+
+  /* Sensor cards */
+  .sensor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+  .sensor-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 6px;
+    font-size: 11px;
+  }
+  .sensor-card .s-label { color: var(--text-dim); text-transform: uppercase; font-size: 9px; margin-bottom: 2px; }
+  .sensor-card .s-value { color: var(--accent); font-weight: 500; font-size: 13px; margin-bottom: 2px; }
+  .sensor-card .s-unit { color: var(--text-dim); font-size: 9px; }
+
+  /* Terminal area */
+  .terminal-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .term-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+  }
+
+  .term-toolbar label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+  }
+  .term-toolbar input[type=checkbox] { accent-color: var(--accent); }
+
+  .toolbar-spacer { flex: 1; }
+
+  .tb-btn {
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .tb-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .log-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+  .log-led { width: 6px; height: 6px; border-radius: 50%; background: #444; }
+  .log-led.active { background: var(--error); animation: pulse 1s infinite; }
+
+  #output {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    min-height: 0;
+  }
+  #output::-webkit-scrollbar { width: 6px; }
+  #output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .line { 
+    display: block; 
+    padding: 0; 
+    word-break: break-all; 
+    white-space: pre-wrap;
+    margin-bottom: 0;
+  }
+  .line.rx { color: var(--text); }
+  .line.rx.data { color: var(--success); }
+  .line.rx.menu { color: var(--accent); }
+  .line.rx.warn { color: var(--warn); }
+  .line.rx.error { color: var(--error); }
+  .line.rx.ok { color: var(--success); }
+  .line.tx { color: var(--text-dim); }
+  .line.sys { color: var(--text-dim); font-style: italic; }
+  .ts { color: var(--text-dim); font-size: 10px; margin-right: 6px; }
+
+  /* Input row */
+  .input-row {
+    display: flex;
+    gap: 6px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+    align-items: center;
+  }
+
+  .prompt { color: var(--accent); font-size: 14px; font-weight: 500; }
+
+  #cmd-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    padding: 6px 8px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #cmd-input:focus { border-color: var(--accent); }
+  #cmd-input::placeholder { color: var(--text-dim); }
+  #cmd-input:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .send-btn {
+    padding: 6px 12px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .send-btn:hover:not(:disabled) { background: var(--accent); color: var(--bg); }
+  .send-btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: var(--border); color: var(--text-dim); }
+
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .ble-warning {
+    background: var(--bg);
+    border: 1px solid var(--warn);
+    border-radius: 3px;
+    padding: 8px;
+    font-size: 10px;
+    color: var(--warn);
+    margin-bottom: 8px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="logo">THRUSTSTAND</div>
+    <div class="status-indicator">
+      <div class="led" id="conn-led"></div>
+      <span id="conn-status">disconnected</span>
+    </div>
+  </div>
+  <div class="status-row">
+    <div class="log-indicator">
+      <div class="log-led" id="log-led"></div>
+      <span id="log-label">idle</span>
+    </div>
+    <div class="status-indicator" id="device-name">no device</div>
+  </div>
+</div>
+
+<div class="main">
+
+  <div class="sidebar">
+    <div class="ble-warning" id="ble-warn">⚠ Web Bluetooth not supported</div>
+    <button class="connect-btn" id="connect-btn" onclick="toggleConnect()">CONNECT BLE</button>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Commands</div>
+      <div class="cmd-menu">
+        <span class="cmd-line"><span class="cmd-key">x</span> emergency stop</span>
+        <span class="cmd-line"><span class="cmd-key">1</span> calibration</span>
+        <span class="cmd-line"><span class="cmd-key">2</span> single run</span>
+        <span class="cmd-line"><span class="cmd-key">3</span> program mission</span>
+        <span class="cmd-line"><span class="cmd-key">4</span> run mission</span>
+        <span class="cmd-line"><span class="cmd-key">s</span> start log</span>
+        <span class="cmd-line"><span class="cmd-key">e</span> stop log</span>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Sensors</div>
+      <div class="sensor-grid">
+        <div class="sensor-card">
+          <div class="s-label">Thrust</div>
+          <div class="s-value" id="sv-thrust">—</div>
+          <div class="s-unit">g</div>
+        </div>
+        <div class="sensor-card">
+          <div class="s-label">Throttle</div>
+          <div class="s-value" id="sv-throttle">—</div>
+          <div class="s-unit">%</div>
+        </div>
+        <div class="sensor-card">
+          <div class="s-label">Voltage</div>
+          <div class="s-value" id="sv-voltage">—</div>
+          <div class="s-unit">V</div>
+        </div>
+        <div class="sensor-card">
+          <div class="s-label">Current</div>
+          <div class="s-value" id="sv-current">—</div>
+          <div class="s-unit">A</div>
+        </div>
+        <div class="sensor-card">
+          <div class="s-label">Power</div>
+          <div class="s-value" id="sv-power">—</div>
+          <div class="s-unit">W</div>
+        </div>
+        <div class="sensor-card">
+          <div class="s-label">Batt</div>
+          <div class="s-value" id="sv-btemp">—</div>
+          <div class="s-unit">°C</div>
+        </div>
+        <div class="sensor-card">
+          <div class="s-label">Motor</div>
+          <div class="s-value" id="sv-mtemp">—</div>
+          <div class="s-unit">°C</div>
+        </div>
+        <div class="sensor-card" style="grid-column: 1 / -1">
+          <div class="s-label">Batt V</div>
+          <div class="s-value" id="sv-battvolt">—</div>
+          <div class="s-unit">V</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal-area">
+    <div class="term-toolbar">
+      <label><input type="checkbox" id="timestamps"> timestamps</label>
+      <label><input type="checkbox" id="parse-data" checked> parse</label>
+      <div class="toolbar-spacer"></div>
+      <button class="tb-btn" onclick="clearTerminal()">clear</button>
+      <button class="tb-btn" onclick="copyAll()">copy</button>
+      <button class="tb-btn" onclick="exportCSV()">export</button>
+    </div>
+    <div id="output"></div>
+    <div class="input-row">
+      <span class="prompt">&gt;</span>
+      <input id="cmd-input" type="text" placeholder="type command..." disabled
+             onkeydown="handleInputKey(event)" autocomplete="off" spellcheck="false">
+      <button class="send-btn" id="send-btn" onclick="sendFromInput()" disabled>SEND</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const UART_SERVICE = '6e400001-b5b3-f393-e0a9-e50e24dcca9e';
+const UART_RX_CHAR = '6e400002-b5b3-f393-e0a9-e50e24dcca9e';
+const UART_TX_CHAR = '6e400003-b5b3-f393-e0a9-e50e24dcca9e';
+
+let bleDevice = null;
+let rxChar = null;
+let rxBuffer = '';
+let csvRows = [];
+let isLogging = false;
+let isConnected = false;
+
+const output = document.getElementById('output');
+const input = document.getElementById('cmd-input');
+const sendBtn = document.getElementById('send-btn');
+const connLed = document.getElementById('conn-led');
+const connStatus = document.getElementById('conn-status');
+const connBtn = document.getElementById('connect-btn');
+const logLed = document.getElementById('log-led');
+const logLabel = document.getElementById('log-label');
+const deviceName = document.getElementById('device-name');
+
+if (!navigator.bluetooth) {
+  document.getElementById('ble-warn').style.display = 'block';
+}
+
+function setConnState(state) {
+  connLed.className = 'led ' + state;
+  connStatus.textContent = state;
+  
+  if (state === 'connected') {
+    isConnected = true;
+    connBtn.textContent = 'DISCONNECT';
+    connBtn.className = 'connect-btn disconnect';
+    input.disabled = false;
+    sendBtn.disabled = false;
+  } else {
+    isConnected = false;
+    connBtn.textContent = state === 'connecting' ? 'CONNECTING...' : 'CONNECT BLE';
+    connBtn.className = 'connect-btn' + (state === 'connecting' ? '' : '');
+    if (state !== 'connecting') {
+      input.disabled = true;
+      sendBtn.disabled = true;
+      deviceName.textContent = 'no device';
+    }
+  }
+}
+setConnState('disconnected');
+
+async function toggleConnect() {
+  if (bleDevice && bleDevice.gatt.connected) {
+    bleDevice.gatt.disconnect();
+    return;
+  }
+  await connectBLE();
+}
+
+async function connectBLE() {
+  if (!navigator.bluetooth) {
+    alert('Web Bluetooth not supported. Use Chrome or Edge.');
+    return;
+  }
+  try {
+    setConnState('connecting');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [UART_SERVICE] }],
+      optionalServices: [UART_SERVICE]
+    });
+    bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+    deviceName.textContent = bleDevice.name || 'unknown';
+    const server = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(UART_SERVICE);
+    const txChar = await service.getCharacteristic(UART_TX_CHAR);
+    rxChar = await service.getCharacteristic(UART_RX_CHAR);
+    txChar.addEventListener('characteristicvaluechanged', onDataReceived);
+    await txChar.startNotifications();
+    setConnState('connected');
+    csvRows = [];
+  } catch (err) {
+    setConnState('error');
+    setTimeout(() => setConnState('disconnected'), 2000);
+  }
+}
+
+function onDisconnected() {
+  setConnState('disconnected');
+  rxChar = null;
+  bleDevice = null;
+  setLogging(false);
+  output.innerHTML = '';
+}
+
+function onDataReceived(event) {
+  const value = event.target.value;
+  const decoder = new TextDecoder();
+  rxBuffer += decoder.decode(value);
+  let nl;
+  while ((nl = rxBuffer.indexOf('\n')) !== -1) {
+    const line = rxBuffer.slice(0, nl).replace(/\r$/, '');
+    rxBuffer = rxBuffer.slice(nl + 1);
+    if (line.trim()) processLine(line);
+  }
+}
+
+const CSV_HEADER = 'time,thrust,voltage,current,power,throttle,batt_temp,motor_temp,batt_voltage';
+const CSV_EXPORT_HEADER = 'time,thrust,voltage,current,power,throttle,batt_temp,motor_temp';
+
+function isDataRow(line) {
+  return /^[\d.]+,/.test(line) && line.split(',').length >= 9;
+}
+
+function classifyLine(line) {
+  if (line.startsWith('***') || line.includes('EMERGENCY')) return 'error';
+  if (line.startsWith('---') || line.includes('MENU') || line.startsWith(' ')) return 'menu';
+  if (line.includes('Complete') || line.includes('set to') || line.includes('SYSTEM')) return 'ok';
+  if (line.includes('Error') || line.includes('error') || line.includes('Timeout')) return 'error';
+  if (line.includes('Arming') || line.includes('Starting') || line.includes('Warning') || line.includes('Taring')) return 'warn';
+  if (isDataRow(line)) return 'data';
+  return '';
+}
+
+function processLine(line) {
+  const parseEnabled = document.getElementById('parse-data').checked;
+  
+  if (line === CSV_HEADER) {
+    isLogging = true;
+    setLogging(true);
+    csvRows = [CSV_HEADER];
+    appendLine(line, 'data');
+    return;
+  }
+
+  if (isDataRow(line)) {
+    if (isLogging) csvRows.push(line);
+    if (parseEnabled) updateSensors(line);
+    appendLine(line, 'data');
+    return;
+  }
+
+  if (line.toLowerCase().includes('logging stopped') || line.toLowerCase().includes('mission complete')) {
+    setLogging(false);
+  }
+
+  appendLine(line, classifyLine(line));
+}
+
+function updateSensors(line) {
+  const parts = line.split(',');
+  if (parts.length < 9) return;
+  const [t, thrust, voltage, current, power, throttle, btemp, mtemp, battvolt] = parts;
+  document.getElementById('sv-thrust').textContent = parseFloat(thrust).toFixed(1);
+  document.getElementById('sv-throttle').textContent = parseFloat(throttle).toFixed(1);
+  document.getElementById('sv-voltage').textContent = parseFloat(voltage).toFixed(2);
+  document.getElementById('sv-current').textContent = parseFloat(current).toFixed(2);
+  document.getElementById('sv-power').textContent = parseFloat(power).toFixed(1);
+  document.getElementById('sv-btemp').textContent = parseFloat(btemp).toFixed(1);
+  document.getElementById('sv-mtemp').textContent = parseFloat(mtemp).toFixed(1);
+  document.getElementById('sv-battvolt').textContent = parseFloat(battvolt).toFixed(2);
+}
+
+function setLogging(active) {
+  isLogging = active;
+  logLed.className = 'log-led' + (active ? ' active' : '');
+  logLabel.textContent = active ? 'logging' : 'idle';
+}
+
+function appendLine(text, cls) {
+  if (!isConnected) return;
+  const el = document.createElement('span');
+  el.className = 'line rx ' + cls;
+  if (document.getElementById('timestamps').checked) {
+    const ts = document.createElement('span');
+    ts.className = 'ts';
+    ts.textContent = new Date().toTimeString().slice(0,8);
+    el.appendChild(ts);
+  }
+  el.appendChild(document.createTextNode(text));
+  output.appendChild(el);
+  output.scrollTop = output.scrollHeight;
+}
+
+async function sendFromInput() {
+  const val = input.value.trim();
+  if (!val || !rxChar) return;
+  try {
+    const encoder = new TextEncoder();
+    await rxChar.writeValue(encoder.encode(val + '\n'));
+    const txLine = document.createElement('span');
+    txLine.className = 'line tx';
+    txLine.appendChild(document.createTextNode('> ' + val));
+    output.appendChild(txLine);
+    input.value = '';
+    output.scrollTop = output.scrollHeight;
+  } catch (err) {}
+}
+
+function handleInputKey(e) {
+  if (e.key === 'Enter') sendFromInput();
+}
+
+function clearTerminal() {
+  output.innerHTML = '';
+}
+
+function copyAll() {
+  const text = [...output.querySelectorAll('.line')].map(el => el.textContent).join('\n');
+  navigator.clipboard.writeText(text);
+}
+
+function exportCSV() {
+  if (csvRows.length < 2) return;
+  const exportRows = [];
+  exportRows.push(CSV_EXPORT_HEADER);
+  for (let i = 1; i < csvRows.length; i++) {
+    const parts = csvRows[i].split(',');
+    if (parts.length >= 9) {
+      exportRows.push(parts.slice(0, 8).join(','));
+    }
+  }
+  const blob = new Blob([exportRows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'thrust_data_' + Date.now() + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
