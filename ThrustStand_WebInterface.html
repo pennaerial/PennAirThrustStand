@@ -35,7 +35,6 @@
     flex-direction: column;
   }
 
-  /* Header */
   .header {
     display: flex;
     align-items: center;
@@ -86,7 +85,6 @@
 
   @keyframes pulse { 50% { opacity: 0.5; } }
 
-  /* Main layout */
   .main {
     display: flex;
     flex: 1;
@@ -94,7 +92,6 @@
     overflow: hidden;
   }
 
-  /* Sidebar */
   .sidebar {
     width: 200px;
     flex-shrink: 0;
@@ -138,7 +135,6 @@
   .connect-btn.disconnect { border-color: var(--error); color: var(--error); }
   .connect-btn.disconnect:hover { background: var(--error); color: var(--bg); }
 
-  /* Command menu */
   .cmd-menu {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -152,7 +148,6 @@
   .cmd-menu .cmd-line { display: block; }
   .cmd-menu .cmd-key { color: var(--accent); font-weight: 500; }
 
-  /* Sensor cards */
   .sensor-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -169,7 +164,6 @@
   .sensor-card .s-value { color: var(--accent); font-weight: 500; font-size: 13px; margin-bottom: 2px; }
   .sensor-card .s-unit { color: var(--text-dim); font-size: 9px; }
 
-  /* Terminal area */
   .terminal-area {
     flex: 1;
     display: flex;
@@ -231,19 +225,13 @@
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.5;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
     min-height: 0;
   }
-  #output::-webkit-scrollbar { width: 6px; }
-  #output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
   .line { 
     display: block; 
-    padding: 0; 
     word-break: break-all; 
     white-space: pre-wrap;
-    margin-bottom: 0;
   }
   .line.rx { color: var(--text); }
   .line.rx.data { color: var(--success); }
@@ -255,7 +243,6 @@
   .line.sys { color: var(--text-dim); font-style: italic; }
   .ts { color: var(--text-dim); font-size: 10px; margin-right: 6px; }
 
-  /* Input row */
   .input-row {
     display: flex;
     gap: 6px;
@@ -270,7 +257,6 @@
 
   #cmd-input {
     flex: 1;
-    min-width: 0;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 3px;
@@ -279,10 +265,8 @@
     font-size: 13px;
     padding: 6px 8px;
     outline: none;
-    transition: border-color 0.2s;
   }
   #cmd-input:focus { border-color: var(--accent); }
-  #cmd-input::placeholder { color: var(--text-dim); }
   #cmd-input:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .send-btn {
@@ -295,16 +279,13 @@
     font-size: 11px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s;
     flex-shrink: 0;
-    white-space: nowrap;
   }
   .send-btn:hover:not(:disabled) { background: var(--accent); color: var(--bg); }
   .send-btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: var(--border); color: var(--text-dim); }
 
   .sidebar::-webkit-scrollbar { width: 4px; }
   .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
   .ble-warning {
     background: var(--bg);
     border: 1px solid var(--warn);
@@ -384,17 +365,12 @@
           <div class="s-unit">W</div>
         </div>
         <div class="sensor-card">
-          <div class="s-label">Batt</div>
-          <div class="s-value" id="sv-btemp">—</div>
-          <div class="s-unit">°C</div>
+          <div class="s-label">Batt SOC</div>
+          <div class="s-value" id="sv-soc">—</div>
+          <div class="s-unit">%</div>
         </div>
         <div class="sensor-card">
-          <div class="s-label">Motor</div>
-          <div class="s-value" id="sv-mtemp">—</div>
-          <div class="s-unit">°C</div>
-        </div>
-        <div class="sensor-card" style="grid-column: 1 / -1">
-          <div class="s-label">Batt V</div>
+          <div class="s-label">Stand</div>
           <div class="s-value" id="sv-battvolt">—</div>
           <div class="s-unit">V</div>
         </div>
@@ -461,7 +437,7 @@ function setConnState(state) {
   } else {
     isConnected = false;
     connBtn.textContent = state === 'connecting' ? 'CONNECTING...' : 'CONNECT BLE';
-    connBtn.className = 'connect-btn' + (state === 'connecting' ? '' : '');
+    connBtn.className = 'connect-btn';
     if (state !== 'connecting') {
       input.disabled = true;
       sendBtn.disabled = true;
@@ -526,17 +502,18 @@ function onDataReceived(event) {
   }
 }
 
-const CSV_HEADER = 'time,thrust,voltage,current,power,throttle,batt_temp,motor_temp,batt_voltage';
-const CSV_EXPORT_HEADER = 'time,thrust,voltage,current,power,throttle,batt_temp,motor_temp';
+// Updated data layout containing exactly 8 variables
+const CSV_HEADER = 'time,thrust,voltage,current,power,throttle,batt_voltage,soc';
+const CSV_EXPORT_HEADER = 'time,thrust,voltage,current,power,throttle,batt_voltage,soc';
 
 function isDataRow(line) {
-  return /^[\d.]+,/.test(line) && line.split(',').length >= 9;
+  return /^[\d.]+,/.test(line) && line.split(',').length >= 8;
 }
 
 function classifyLine(line) {
   if (line.startsWith('***') || line.includes('EMERGENCY')) return 'error';
   if (line.startsWith('---') || line.includes('MENU') || line.startsWith(' ')) return 'menu';
-  if (line.includes('Complete') || line.includes('set to') || line.includes('SYSTEM')) return 'ok';
+  if (line.includes('Complete') || line.includes('set to') || line.includes('SYSTEM') || line.includes('calibrated')) return 'ok';
   if (line.includes('Error') || line.includes('error') || line.includes('Timeout')) return 'error';
   if (line.includes('Arming') || line.includes('Starting') || line.includes('Warning') || line.includes('Taring')) return 'warn';
   if (isDataRow(line)) return 'data';
@@ -570,16 +547,16 @@ function processLine(line) {
 
 function updateSensors(line) {
   const parts = line.split(',');
-  if (parts.length < 9) return;
-  const [t, thrust, voltage, current, power, throttle, btemp, mtemp, battvolt] = parts;
+  if (parts.length < 8) return;
+  const [t, thrust, voltage, current, power, throttle, soc, battvolt] = parts;
+  
   document.getElementById('sv-thrust').textContent = parseFloat(thrust).toFixed(1);
   document.getElementById('sv-throttle').textContent = parseFloat(throttle).toFixed(1);
   document.getElementById('sv-voltage').textContent = parseFloat(voltage).toFixed(2);
   document.getElementById('sv-current').textContent = parseFloat(current).toFixed(2);
   document.getElementById('sv-power').textContent = parseFloat(power).toFixed(1);
-  document.getElementById('sv-btemp').textContent = parseFloat(btemp).toFixed(1);
-  document.getElementById('sv-mtemp').textContent = parseFloat(mtemp).toFixed(1);
   document.getElementById('sv-battvolt').textContent = parseFloat(battvolt).toFixed(2);
+  document.getElementById('sv-soc').textContent = parseFloat(soc).toFixed(1);
 }
 
 function setLogging(active) {
@@ -637,7 +614,7 @@ function exportCSV() {
   exportRows.push(CSV_EXPORT_HEADER);
   for (let i = 1; i < csvRows.length; i++) {
     const parts = csvRows[i].split(',');
-    if (parts.length >= 9) {
+    if (parts.length >= 8) {
       exportRows.push(parts.slice(0, 8).join(','));
     }
   }
