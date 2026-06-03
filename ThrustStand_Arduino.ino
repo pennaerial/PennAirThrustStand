@@ -7,15 +7,12 @@
 // ========================================================
 
 BLEService uartService("6E400001-B5B3-F393-E0A9-E50E24DCCA9E");
-
 // TX: Arduino → Web app (notify)
 BLECharacteristic txChar("6E400003-B5B3-F393-E0A9-E50E24DCCA9E",
                          BLERead | BLENotify, 128);
-
 // RX: Web app → Arduino (write)
 BLECharacteristic rxChar("6E400002-B5B3-F393-E0A9-E50E24DCCA9E",
                          BLEWrite | BLEWriteWithoutResponse, 64);
-
 // Internal BLE receive buffer — accumulates incoming bytes
 String bleRxBuffer = "";
 
@@ -28,9 +25,8 @@ const int HX711_SCK   = 3;
 const int ESC_PIN     = 9;
 const int VOLTAGE_PIN = A2;
 const int CURRENT_PIN = A1;
-const int BATT_TEMP_PIN  = A3;
-const int MOTOR_TEMP_PIN = A4;
-const int BATT_VOLTAGE_PIN = A6;  // MKR WiFi 1010 internal battery monitor
+// const int BATT_TEMP_PIN  = A3; // Commented out per request
+const int BATT_VOLTAGE_PIN = A6; // MKR WiFi 1010 internal battery monitor
 
 HX711_ADC LoadCell(HX711_DOUT, HX711_SCK);
 Servo esc;
@@ -44,14 +40,16 @@ float VOLTAGE_SCALE   = 12.3;
 float VOLTAGE_OFFSET  = 0.0;
 float CURRENT_SCALE   = 18.96;
 float CURRENT_OFFSET  = 0.558;
+// float BATT_TEMP_OFFSET  = 0.0; // Commented out per request
 
-float BATT_TEMP_OFFSET  = 0.0;
-float MOTOR_TEMP_OFFSET = 0.0;
-
-const float THERMISTOR_NOMINAL  = 10000.0;
-const float TEMPERATURE_NOMINAL = 25.0;
-const float B_COEFFICIENT       = 3950.0;
-const float SERIES_RESISTOR     = 10000.0;
+// ========================================================
+// STATE OF CHARGE (SOC) COULOMB COUNTING VARIABLES
+// ========================================================
+float batteryCapacity_mAh = 2200.0; // Default capacity configuration
+float mAhConsumed         = 0.0;    // Accumulated capacity consumption
+float currentSOC          = 100.0;  // Calculated State Of Charge percentage
+unsigned long lastSOCUpdate = 0;
+const unsigned long SOC_UPDATE_INTERVAL = 200; // Track in steps matching telemetry rates
 
 // ========================================================
 // SYSTEM SETTINGS
@@ -99,15 +97,13 @@ unsigned long currentStepDuration = 0;
 
 void emergencyStop();
 void printMenu();
+float readCurrent();
 
 // ========================================================
 // BLE OUTPUT HELPERS
-// Mirrors every print to both USB Serial and BLE TX.
-// Chunks output at 20 bytes to stay within safe MTU.
 // ========================================================
 
 void bleSend(const String& s) {
-  // Only transmit if a central is connected and subscribed
   if (!BLE.connected()) return;
   int len = s.length();
   int offset = 0;
@@ -157,7 +153,6 @@ void blePrintln(int v) {
 
 // ========================================================
 // BLE INPUT HELPERS
-// Polls BLE and drains any new RX bytes into bleRxBuffer.
 // ========================================================
 
 void pollBLE() {
@@ -171,13 +166,11 @@ void pollBLE() {
   }
 }
 
-// Returns true if either USB Serial or BLE has a byte waiting
 bool inputAvailable() {
   pollBLE();
   return (Serial.available() > 0) || (bleRxBuffer.length() > 0);
 }
 
-// Reads one byte — USB Serial takes priority, then BLE buffer
 char inputRead() {
   if (Serial.available() > 0) return (char)Serial.read();
   if (bleRxBuffer.length() > 0) {
@@ -198,7 +191,6 @@ void clearSerialBuffer() {
   bleRxBuffer = "";
 }
 
-// Waits for a single character from USB Serial or BLE
 char waitForChar() {
   while (true) {
     LoadCell.update();
@@ -206,7 +198,6 @@ char waitForChar() {
 
     if (inputAvailable()) {
       char c = inputRead();
-
       if (c == 'x' || c == 'X') {
         emergencyStop();
         return 'x';
@@ -219,7 +210,6 @@ char waitForChar() {
   }
 }
 
-// Reads a float value from USB Serial or BLE input
 float waitForFloat() {
   String inputString = "";
   while (true) {
@@ -228,7 +218,6 @@ float waitForFloat() {
 
     if (inputAvailable()) {
       char c = inputRead();
-
       if (c == 'x' || c == 'X') {
         emergencyStop();
         return 0.0;
@@ -282,27 +271,38 @@ float readCurrent() {
   return ((iAdc - CURRENT_OFFSET) * CURRENT_SCALE);
 }
 
-float readTemperature(int pin, float offset) {
-  int analogVal = analogRead(pin);
-  if (analogVal == 0 || analogVal == 1023) return 0.0;
-
-  float resistance = SERIES_RESISTOR / ((1023.0 / analogVal) - 1.0);
-  float steinhart  = resistance / THERMISTOR_NOMINAL;
-  steinhart = log(steinhart);
-  steinhart /= B_COEFFICIENT;
-  steinhart += 1.0 / (TEMPERATURE_NOMINAL + 273.15);
-  steinhart = 1.0 / steinhart;
-  steinhart -= 273.15;
-  return steinhart + offset;
-}
-
 float readBatteryVoltage() {
   long sum = 0;
   for (int i = 0; i < NUM_SAMPLES; i++) sum += analogRead(BATT_VOLTAGE_PIN);
   float vAdc = (sum / (float)NUM_SAMPLES) * ADC_REF / ADC_RES;
-  // MKR WiFi 1010 battery is read through a 1/2 voltage divider
-  // so multiply by 2 to get actual battery voltage
   return vAdc * 2.0;
+}
+
+// COULOMB COUNTING CURRENT INTEGRATION METHOD
+void updateSOC() {
+  unsigned long currentTime = millis();
+  if (lastSOCUpdate == 0) {
+    lastSOCUpdate = currentTime;
+    return;
+  }
+
+  unsigned long durationMs = currentTime - lastSOCUpdate;
+  if (durationMs >= SOC_UPDATE_INTERVAL) {
+    lastSOCUpdate = currentTime;
+    float currentA = readCurrent();
+    
+    // Ignore fractional negative offset fluctuations when idling
+    if (currentA < 0.0) currentA = 0.0;
+
+    // Convert Amperes to Milliamperes, calculate hours elapsed, integrate consumption
+    float mA = currentA * 1000.0;
+    float hours = (float)durationMs / 3600000.0;
+    mAhConsumed += (mA * hours);
+
+    // Compute remaining capacity ratio
+    currentSOC = 100.0 - ((mAhConsumed / batteryCapacity_mAh) * 100.0);
+    currentSOC = constrain(currentSOC, 0.0, 100.0);
+  }
 }
 
 void printMenu() {
@@ -325,13 +325,11 @@ void calibrateMenu() {
   blePrintln(" L = Load Cell");
   blePrintln(" V = Voltage");
   blePrintln(" C = Current");
-  blePrintln(" T = Temperatures");
+  blePrintln(" B = Battery Pack Capacity & SOC Setup");
   blePrintln(" E = ESC Limits");
   blePrintln(" O = Return to Main Menu");
 
   char choice = waitForChar();
-
-  // --- LOAD CELL ---
   if (choice == 'L' || choice == 'l') {
     blePrintln("\n[LOAD CELL] Ensure tray is empty. Send 't' to tare.");
     while (waitForChar() != 't') {
@@ -342,7 +340,6 @@ void calibrateMenu() {
     LoadCell.tareNoDelay();
     while (!LoadCell.getTareStatus()) LoadCell.update();
     blePrintln(" Complete.");
-
     blePrintln("\nSelect Method:\n1 = Manual input calibration factor\n2 = Calibrate with known weight");
     int sub = 0;
     while (sub != 1 && sub != 2) {
@@ -366,8 +363,6 @@ void calibrateMenu() {
     blePrint("Load Cell Calibration Factor set to: ");
     blePrintln(LOAD_SCALE, 2);
   }
-
-  // --- VOLTAGE ---
   else if (choice == 'V' || choice == 'v') {
     blePrintln("\n[VOLTAGE] Select Method:\n1 = Manual scale factor input\n2 = Compute from multi-meter reading");
     int sub = (int)waitForFloat();
@@ -383,8 +378,6 @@ void calibrateMenu() {
     blePrint("Voltage Scale set to: ");
     blePrintln(VOLTAGE_SCALE, 4);
   }
-
-  // --- CURRENT ---
   else if (choice == 'C' || choice == 'c') {
     blePrintln("\n[CURRENT] Ensure motor is OFF. Taring resting current...");
     long sum = 0;
@@ -411,17 +404,28 @@ void calibrateMenu() {
     blePrint("Current Scale set to: ");
     blePrintln(CURRENT_SCALE, 4);
   }
-
-  // --- TEMPERATURE ---
-  else if (choice == 'T' || choice == 't') {
-    blePrintln("\n[TEMPERATURE] Enter current ambient room temp (degC):");
-    float actualT = waitForFloat();
-    BATT_TEMP_OFFSET  = actualT - readTemperature(BATT_TEMP_PIN,  0);
-    MOTOR_TEMP_OFFSET = actualT - readTemperature(MOTOR_TEMP_PIN, 0);
-    blePrintln("Ambient temperature offsets calculated and applied successfully.");
+  else if (choice == 'B' || choice == 'b') {
+    blePrintln("\n[BATTERY CONFIG] Enter Battery Capacity in mAh:");
+    float inputCap = waitForFloat();
+    if (inputCap > 0.0) {
+      batteryCapacity_mAh = inputCap;
+      blePrint("Capacity registered: ");
+      blePrint((int)batteryCapacity_mAh);
+      blePrintln(" mAh");
+    }
+    blePrintln("Reset remaining State of Charge (SOC) to 100%? (y/n)");
+    char confirm = waitForChar();
+    if (confirm == 'y' || confirm == 'Y') {
+      mAhConsumed = 0.0;
+      currentSOC  = 100.0;
+      blePrintln("Coulomb counter reset. Battery calibrated to 100% SOC.");
+    }
   }
-
-  // --- ESC ---
+  /* // --- TEMPERATURE CONFIGURATION COMMENTED OUT ---
+  else if (choice == 'T' || choice == 't') {
+    ...
+  }
+  */
   else if (choice == 'E' || choice == 'e') {
     blePrintln("\n[ESC CAL] !!! REMOVE PROPELLER FOR SAFETY !!!\nSend 'y' to confirm and begin throttle range programming.");
     if (waitForChar() == 'y') {
@@ -444,7 +448,6 @@ void programMission() {
   blePrintln("How many phases in this mission? (Max 20)");
   totalMissionSteps = (int)waitForFloat();
   if (totalMissionSteps > MAX_STEPS) totalMissionSteps = MAX_STEPS;
-
   for (int i = 0; i < totalMissionSteps; i++) {
     blePrint("Step ");
     blePrint(i + 1);
@@ -470,11 +473,10 @@ void triggerMotorRun(float throttle, unsigned long durationMs, bool isMissionRun
   stepStartTime     = millis();
   motorRunning      = true;
   inMission         = isMissionRun;
-
   if (!logging) {
     logging   = true;
     startTime = millis();
-    blePrintln("time,thrust,voltage,current,power,throttle,batt_temp,motor_temp,batt_voltage");
+    blePrintln("time,thrust,voltage,current,power,throttle,soc,stand");
   }
   updateESC();
 }
@@ -485,11 +487,9 @@ void triggerMotorRun(float throttle, unsigned long durationMs, bool isMissionRun
 
 void setup() {
   Serial.begin(115200);
-  // Don't block here — MKR WiFi 1010 may run without USB
   unsigned long serialWait = millis();
   while (!Serial && millis() - serialWait < 3000);
 
-  // --- HX711 Load Cell ---
   LoadCell.begin();
   LoadCell.start(2000, true);
   if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
@@ -497,14 +497,10 @@ void setup() {
     while (1);
   }
   LoadCell.setCalFactor(LOAD_SCALE);
-
-  // --- ESC ---
   esc.attach(ESC_PIN);
   esc.writeMicroseconds(ESC_MIN);
   Serial.println("Arming ESC...");
   delay(3000);
-
-  // --- BLE ---
   if (!BLE.begin()) {
     Serial.println("BLE init failed! Check board.");
     while (1);
@@ -528,12 +524,11 @@ void setup() {
 
 void loop() {
   LoadCell.update();
-  pollBLE();  // Keep BLE alive and drain RX into bleRxBuffer
+  pollBLE();
+  updateSOC(); // Non-blocking capacity tracker
 
-  // ----- COMMAND INPUT (USB Serial + BLE) -----
   if (inputAvailable()) {
     char cmd = inputRead();
-
     if (cmd == 'x' || cmd == 'X') {
       emergencyStop();
       clearSerialBuffer();
@@ -569,7 +564,7 @@ void loop() {
       clearSerialBuffer();
       logging   = true;
       startTime = millis();
-      blePrintln("time,thrust,voltage,current,power,throttle,batt_temp,motor_temp,batt_voltage");
+      blePrintln("time,thrust,voltage,current,power,throttle,soc,stand");
     }
     else if ((cmd == 'e' || cmd == 'E') && logging) {
       clearSerialBuffer();
@@ -579,7 +574,6 @@ void loop() {
     }
   }
 
-  // ----- MOTOR TIMING & MISSION LOGIC -----
   if (motorRunning) {
     if (millis() - stepStartTime >= currentStepDuration) {
       if (inMission) {
@@ -609,29 +603,23 @@ void loop() {
     }
   }
 
-  // ----- LOGGING ROUTINE -----
   if (logging && (millis() - lastLog >= LOG_INTERVAL)) {
     lastLog = millis();
-
     float thrust  = LoadCell.getData();
     float voltage = readVoltage();
     float current = readCurrent();
     float power   = voltage * current;
-    float bTemp   = readTemperature(BATT_TEMP_PIN,  BATT_TEMP_OFFSET);
-    float mTemp   = readTemperature(MOTOR_TEMP_PIN, MOTOR_TEMP_OFFSET);
     float battVoltage = readBatteryVoltage();
     float t       = (millis() - startTime) / 1000.0;
 
-    // Build the CSV row as one string and send it in one shot
-    // to avoid BLE chunking splitting a row across packets
+    // Generated unified 8-column data line matching modifications
     String row = String(t, 2) + "," +
                  String(thrust, 3) + "," +
                  String(voltage, 3) + "," +
                  String(current, 3) + "," +
                  String(power, 3) + "," +
                  String(throttlePercent, 1) + "," +
-                 String(bTemp, 2) + "," +
-                 String(mTemp, 2) + "," +
+                 String(currentSOC, 1) + "," +
                  String(battVoltage, 2);
 
     blePrintln(row);
