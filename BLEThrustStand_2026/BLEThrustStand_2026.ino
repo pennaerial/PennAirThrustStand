@@ -521,9 +521,19 @@ void onBleDisconnected(BLEDevice central) {
 // ========================================================
 
 void setup() {
+  // FIX: start the ESC signal first, before anything that can block or halt.
+  // It used to start after LoadCell.begin()/start() (2+ seconds), and never
+  // started at all if the HX711 check below failed and setup() got stuck in
+  // while(1) — in both cases the ESC saw no signal at all and beeped "no
+  // receiver" the whole time. Servo runs off a timer in the background, so
+  // the pulse keeps going through every blocking call later in setup().
+  esc.attach(ESC_PIN, ESC_MIN, ESC_MAX);
+  esc.writeMicroseconds(ESC_MIN);
+
   Serial.begin(115200);
   unsigned long serialWait = millis();
   while (!Serial && millis() - serialWait < 3000);
+  Serial.println("ESC signal started. Arming ESC...");
 
   // FIX: the voltage/current maths assume a 10-bit ADC (ADC_RES = 1023).
   // Some boards (e.g. Nano ESP32) default to 12 bits, which would give
@@ -537,9 +547,6 @@ void setup() {
     while (1);
   }
   LoadCell.setCalFactor(LOAD_SCALE);
-  esc.attach(ESC_PIN);
-  esc.writeMicroseconds(ESC_MIN);
-  Serial.println("Arming ESC...");
   delay(3000);
   if (!BLE.begin()) {
     Serial.println("BLE init failed! Check board.");
