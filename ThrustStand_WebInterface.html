@@ -385,11 +385,6 @@
           <div class="s-value" id="sv-soc">—</div>
           <div class="s-unit">%</div>
         </div>
-        <div class="sensor-card">
-          <div class="s-label">Stand</div>
-          <div class="s-value" id="sv-battvolt">—</div>
-          <div class="s-unit">V</div>
-        </div>
       </div>
     </div>
   </div>
@@ -563,15 +558,14 @@ function onDataReceived(event) {
   }
 }
 
-// FIX: this must match, character for character, the header the Arduino sends:
-//   "time,thrust,voltage,current,power,throttle,soc,stand"
-// The old constant had batt_voltage/soc swapped, so the header never matched
-// and the CSV buffer was never reset when a log started.
-const CSV_HEADER = 'time,thrust,voltage,current,power,throttle,soc,stand';
-const CSV_EXPORT_HEADER = 'time,thrust,voltage,current,power,throttle,soc,stand_voltage';
+// This must match, character for character, the header the Arduino sends:
+//   "time,thrust,voltage,current,power,throttle,soc"
+// "Stand" (A1, unused) was removed — nothing was wired to it.
+const CSV_HEADER = 'time,thrust,voltage,current,power,throttle,soc';
+const CSV_EXPORT_HEADER = CSV_HEADER;
 
 function isDataRow(line) {
-  return /^-?[\d.]+,/.test(line) && line.split(',').length >= 8;
+  return /^-?[\d.]+,/.test(line) && line.split(',').length >= 7;
 }
 
 function classifyLine(line) {
@@ -616,16 +610,15 @@ function processLine(line) {
 
 function updateSensors(line) {
   const parts = line.split(',');
-  if (parts.length < 8) return;
+  if (parts.length < 7) return;
   // Same order as the Arduino row.
-  const [t, thrust, voltage, current, power, throttle, soc, stand] = parts;
+  const [t, thrust, voltage, current, power, throttle, soc] = parts;
 
   document.getElementById('sv-thrust').textContent = parseFloat(thrust).toFixed(1);
   document.getElementById('sv-throttle').textContent = parseFloat(throttle).toFixed(1);
   document.getElementById('sv-voltage').textContent = parseFloat(voltage).toFixed(2);
   document.getElementById('sv-current').textContent = parseFloat(current).toFixed(2);
   document.getElementById('sv-power').textContent = parseFloat(power).toFixed(1);
-  document.getElementById('sv-battvolt').textContent = parseFloat(stand).toFixed(2);
   document.getElementById('sv-soc').textContent = parseFloat(soc).toFixed(1);
 }
 
@@ -704,8 +697,8 @@ function exportCSV() {
   const exportRows = [CSV_EXPORT_HEADER];
   for (let i = 1; i < csvRows.length; i++) {
     const parts = csvRows[i].split(',');
-    if (parts.length >= 8) {
-      exportRows.push(parts.slice(0, 8).join(','));
+    if (parts.length >= 7) {
+      exportRows.push(parts.slice(0, 7).join(','));
     }
   }
   const blob = new Blob([exportRows.join('\n')], { type: 'text/csv' });
