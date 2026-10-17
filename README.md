@@ -1,5 +1,5 @@
-Arduino File: 10_10_ThrustStand.ino\
-Web Interface: 10_10_WebInterface.html
+Arduino File: BLEThrustStand_2026/BLEThrustStand_2026.ino\
+Web Interface: ThrustStand_WebInterface.html
 
 See documentation here: https://docs.google.com/document/d/1Ft33sn2yKgaCtt8PaQJaWIB9m4Go_OUXZHSPiyGuBLQ/edit?tab=t.0
 

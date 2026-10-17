@@ -22,13 +22,9 @@ String bleRxBuffer = "";
 
 const int HX711_DOUT  = 2;
 const int HX711_SCK   = 3;
-const int ESC_PIN     = 9;
-const int VOLTAGE_PIN = A3; // formerly A2 on MKR 1010
-const int CURRENT_PIN = A2; // formerly A1 on MKR 1010
-// FIX: this pin was commented out but readBatteryVoltage() still used it,
-// which is a compile error. A1 is a placeholder - set it to whatever pin
-// the "stand" voltage is actually wired to.
-const int BATT_VOLTAGE_PIN = A1;
+const int ESC_PIN     = 7;
+const int VOLTAGE_PIN = A4; // formerly A2 on MKR 1010
+const int CURRENT_PIN = A3; // formerly A1 on MKR 1010
 
 HX711_ADC LoadCell(HX711_DOUT, HX711_SCK);
 Servo esc;
@@ -285,13 +281,6 @@ float readCurrent() {
   return ((iAdc - CURRENT_OFFSET) * CURRENT_SCALE);
 }
 
-float readBatteryVoltage() {
-  long sum = 0;
-  for (int i = 0; i < NUM_SAMPLES; i++) sum += analogRead(BATT_VOLTAGE_PIN);
-  float vAdc = (sum / (float)NUM_SAMPLES) * ADC_REF / ADC_RES;
-  return vAdc * 2.0;
-}
-
 // COULOMB COUNTING CURRENT INTEGRATION METHOD
 void updateSOC() {
   unsigned long currentTime = millis();
@@ -493,7 +482,7 @@ void triggerMotorRun(float throttle, unsigned long durationMs, bool isMissionRun
   if (!logging) {
     logging   = true;
     startTime = millis();
-    blePrintln("time,thrust,voltage,current,power,throttle,soc,stand");
+    blePrintln("time,thrust,voltage,current,power,throttle,soc");
   }
   updateESC();
 }
@@ -521,9 +510,19 @@ void onBleDisconnected(BLEDevice central) {
 // ========================================================
 
 void setup() {
+  // FIX: start the ESC signal first, before anything that can block or halt.
+  // It used to start after LoadCell.begin()/start() (2+ seconds), and never
+  // started at all if the HX711 check below failed and setup() got stuck in
+  // while(1) — in both cases the ESC saw no signal at all and beeped "no
+  // receiver" the whole time. Servo runs off a timer in the background, so
+  // the pulse keeps going through every blocking call later in setup().
+  esc.attach(ESC_PIN, ESC_MIN, ESC_MAX);
+  esc.writeMicroseconds(ESC_MIN);
+
   Serial.begin(115200);
   unsigned long serialWait = millis();
   while (!Serial && millis() - serialWait < 3000);
+  Serial.println("ESC signal started. Arming ESC...");
 
   // FIX: the voltage/current maths assume a 10-bit ADC (ADC_RES = 1023).
   // Some boards (e.g. Nano ESP32) default to 12 bits, which would give
@@ -537,9 +536,6 @@ void setup() {
     while (1);
   }
   LoadCell.setCalFactor(LOAD_SCALE);
-  esc.attach(ESC_PIN);
-  esc.writeMicroseconds(ESC_MIN);
-  Serial.println("Arming ESC...");
   delay(3000);
   if (!BLE.begin()) {
     Serial.println("BLE init failed! Check board.");
@@ -628,7 +624,7 @@ void loop() {
       clearSerialBuffer();
       logging   = true;
       startTime = millis();
-      blePrintln("time,thrust,voltage,current,power,throttle,soc,stand");
+      blePrintln("time,thrust,voltage,current,power,throttle,soc");
     }
     else if ((cmd == 'e' || cmd == 'E') && logging) {
       clearSerialBuffer();
@@ -673,18 +669,16 @@ void loop() {
     float voltage = readVoltage();
     float current = readCurrent();
     float power   = voltage * current;
-    float battVoltage = readBatteryVoltage();
     float t       = (millis() - startTime) / 1000.0;
 
-    // 8 columns, in this order: time,thrust,voltage,current,power,throttle,soc,stand
+    // 7 columns, in this order: time,thrust,voltage,current,power,throttle,soc
     String row = String(t, 2) + "," +
                  String(thrust, 3) + "," +
                  String(voltage, 3) + "," +
                  String(current, 3) + "," +
                  String(power, 3) + "," +
                  String(throttlePercent, 1) + "," +
-                 String(currentSOC, 1) + "," +
-                 String(battVoltage, 2);
+                 String(currentSOC, 1);
 
     blePrintln(row);
   }
